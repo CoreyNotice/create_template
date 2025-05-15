@@ -1,0 +1,281 @@
+import xlsx from 'xlsx';
+import fs from 'fs/promises';
+import fsSync from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+ async function create_template (){
+// ✅ Define file paths
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const jsonDir = path.resolve(__dirname, "Data");
+const files = await fs.readdir(jsonDir);
+
+let processedCount = 0;
+let skippedCount = 0;
+let skippedFiles = [];
+
+for(const fileName of files.filter(f => f.endsWith('.xlsx'))){
+if (!fileName) {
+  throw new Error("❌ No .xlsx file found in JsonData folder.");
+}
+
+const filePath = path.join(jsonDir, fileName)
+const outputFolder = path.resolve(__dirname, 'Output');;
+const outputFilePath = path.join(outputFolder, `cleaned_data_${path.basename(fileName, '.xlsx')}.json`);
+try {
+// ✅ Read the Excel file
+const workbook = xlsx.readFile(filePath);
+const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+
+// ✅ Define parent-child header mappings for structured parsing
+const headerGroups = {
+    "Project": ["Project Name", "FMS ID", "LLW", "Award"],
+    "Vendor Information": ["Vendor ID", "Vendor Number", "Contract No", "Contract Expiration Date", "Vendor Name", "Vendor Address", "City1", "State1", "Zip Code1"],
+    "Delivery To Information (School where work performed)": ["School ID / Name", "Address1","City2", "State2", "Zip Code2", "Attention To: (Custodain)", "Attention To Phone No. (Custodian)", "Title"],
+    "Invoice  To Information": ["Agency", "Address2", "City3", "State3", "Zip Code3", "Attention To Phone No. (Borough Director)", "Attention To (Borough Director)"],
+    "Items to be purchased": ["Description", "Quantity", "Unit", "$ Unit Price", "Amount Owed"]
+};
+const excludedChildren =['FMS ID','Award','Vendor Number','Vendor Id']
+
+
+
+// ✅ Function to find header positions dynamically
+function findHeaderCells() {
+    const range = xlsx.utils.decode_range(worksheet['!ref']);
+    let headerPositions = {};
+
+    // 🔍 Loop through each cell to detect headers
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+            const cell_address = { c: C, r: R };
+            const cell_ref = xlsx.utils.encode_cell(cell_address);
+
+            if (worksheet[cell_ref] && worksheet[cell_ref].v) {
+                let cellValue = worksheet[cell_ref].v.toString().trim();
+                headerPositions[cellValue] = { ref: cell_ref, row: R, col: C };
+            }
+        }
+    }
+    return headerPositions;
+}
+
+// ✅ Find all headers in the sheet
+const headerCells = findHeaderCells();
+// ✅ Required Header Validation
+function validateRequiredHeaders(headerGroups, headerCells) {
+    let missingHeaders = [];
+    // const excludedChildren =['FMS ID','Award','Vendor Number','Vendor Id']
+
+
+    for (const [parent, children] of Object.entries(headerGroups)) {
+        if(!excludedChildren.includes(parent)){
+        if (!headerCells[parent]) {
+            missingHeaders.push(`❌ Missing parent header: ${parent}`);
+        }
+    }
+
+        children.forEach(child => {
+            if(!excludedChildren.includes(child)){
+            if (!headerCells[child]) {
+                missingHeaders.push(`❌ Missing child header: ${child} under ${parent}`);
+            }
+        }
+        });
+    }
+
+    if (missingHeaders.length > 0) {
+        console.error("🚫 Header validation failed:\n" + missingHeaders.join("\n"));
+        console.error("Validation failed due to missing headers.");
+    
+    }
+
+    console.log("✅ All required headers are present.");
+   
+}
+
+validateRequiredHeaders(headerGroups, headerCells);
+
+// ✅ Extract static information (excluding items to be purchased)
+let baseData = {};
+let errors=[]
+for (const [parentHeader, childHeaders] of Object.entries(headerGroups)) {
+    if (parentHeader !== "Items to be purchased" && headerCells[parentHeader]) {
+        const parentRow = headerCells[parentHeader].row;
+        
+        childHeaders.forEach(childHeader => {
+            if (headerCells[childHeader] && headerCells[childHeader].row === parentRow + 1) {
+                const cellRef = headerCells[childHeader].ref;
+                const headerCellDecoded = xlsx.utils.decode_cell(cellRef);
+                const cellBelowRef = xlsx.utils.encode_cell({ c: headerCellDecoded.c, r: headerCellDecoded.r + 1 });
+                const cell = worksheet[cellBelowRef];
+               if(!excludedChildren.includes(childHeader)){
+                if (!cell || cell.v == null || cell.v === "") {
+                    errors.push(`❌ Missing value for required field "${childHeader}" under "${parentHeader}"`);
+                }
+            }
+                function getCellValue(cell) {
+                    return cell?.w || cell?.v || "";
+                }
+                baseData[childHeader] = getCellValue(cell);
+
+                            }
+        });
+    }
+}
+if(errors.length>0){
+    console.error(`🚫 Validation Errors in files ${fileName}:\n` + errors.join("\n"))
+continue;
+}
+
+// ✅ Extract "Items to be Purchased"
+let items = [];
+if (headerCells["Items to be purchased"]) {
+    const itemRow = headerCells["Items to be purchased"].row + 1;
+    let rowIndex = itemRow;
+
+    while (true) {
+        let descriptionCellRef = xlsx.utils.encode_cell({ c: headerCells["Description"].col, r: rowIndex });
+        let quantityCellRef = xlsx.utils.encode_cell({ c: headerCells["Quantity"].col, r: rowIndex });
+        let unitCellRef = xlsx.utils.encode_cell({ c: headerCells["Unit"].col, r: rowIndex });
+        let priceCellRef = xlsx.utils.encode_cell({ c: headerCells["$ Unit Price"].col, r: rowIndex });
+        let amountCellRef = xlsx.utils.encode_cell({ c: headerCells["Amount Owed"].col, r: rowIndex });
+
+        if (!worksheet[descriptionCellRef]) break;
+
+        let description = worksheet[descriptionCellRef]?.v || "";
+        let quantity = worksheet[quantityCellRef]?.v || "";
+        let unit = worksheet[unitCellRef]?.v || "";
+        let unitPrice = worksheet[priceCellRef]?.v || "";
+        let amountOwed = worksheet[amountCellRef]?.v || "";
+          if (description.toLowerCase() === "description") {
+            rowIndex++; 
+            continue; // Skip header row
+        }
+        if (!description) break; // Stop if no more items
+
+        items.push({ 
+            Description: description, 
+            Quantity: quantity,
+             Unit: unit, "Unit Price": unitPrice,
+              "Amount Owed": amountOwed 
+            });
+
+        rowIndex++;
+    }
+}
+
+// ✅ Split data into pages if more than 8 items
+const MAX_ITEMS_PER_PAGE = 8;
+let totalPages = Math.ceil(items.length / MAX_ITEMS_PER_PAGE);
+let paginatedData = [];
+
+for (let i = 0; i < totalPages; i++) {
+    let pageItems = items.slice(i * MAX_ITEMS_PER_PAGE, (i + 1) * MAX_ITEMS_PER_PAGE);
+     while(pageItems.length<MAX_ITEMS_PER_PAGE){
+        pageItems.push({
+            Description: "",
+            Quantity: "",
+            Unit: "",
+            "Unit Price": "",
+            "Amount Owed": "" 
+        })
+     }
+    let pageObject = {
+        ...baseData,
+        "Items to be purchased": pageItems,
+        "Page": `${i + 1}`,
+        "Of": `${totalPages}`,
+        "Date":new Date().toISOString().slice(0, 10)
+    };
+    
+    paginatedData.push(pageObject);
+}
+
+// ✅ Function to clean and format JSON data
+function cleanJson(data) {
+    return data.map(entry => {
+        let cleanedEntry = {};
+        
+        for (let key in entry) {
+            let newKey = key
+            .replace(/Project Name/, 'Project_Name')
+            .replace(/Vendor ID/, 'V_I')
+            .replace(/Vendor Number/, 'V')
+            .replace(/Contract No/, 'Contract_Number')
+            .replace(/Contract Expiration Date/, 'Term_Date')
+            .replace(/Vendor Name/, 'Vendor_Name')
+            .replace(/Vendor Address/, 'Vendor_Address')
+            .replace(/City1/, 'V_City')
+            .replace(/State1/, 'V_State')
+            .replace(/Zip Code1/, 'V_Zip')
+            .replace(/School_ID___Name"/, 'School ID/Name')
+            .replace(/Addess1/, 'Del_Address')
+            .replace(/City2/, 'Del_C')
+            .replace(/State2/, 'Del_St')
+            .replace(/Zip Code2/, 'D_Z')
+            .replace(/State2/, 'Del_St')
+            .replace(/Attention To: (Custodain)/, 'Del_Attention')
+            .replace(/"Attention_To_Phone_No._(Custodian)"/, 'Del_Phone')
+            .replace(/Attention To: (Custodain)/, 'Del_Attention')
+            .replace(/Agency/, 'AGENCY')
+            .replace(/Addess2/, 'Invoice_Address')
+            .replace(/City3/, 'In_Ci')
+            .replace(/State3/, 'In_St')
+            .replace(/Zip Code3/, 'I_Z')
+            .replace(/Agency/, 'AGENCY')
+            .replace(/Attention_To_Phone_No._(Borough_Director)/, 'Invoice_Phone')
+            .replace(/\s+/g, '_')
+            .replace(/\//g, '_');
+            cleanedEntry[newKey] = entry[key] === null ? "" : entry[key];
+        }
+
+        // Flatten items
+        if (cleanedEntry.Items_to_be_purchased) {
+            const flattenedItems= cleanedEntry.Items_to_be_purchased = cleanedEntry.Items_to_be_purchased.reduce((acc, item, index) => {
+                acc[`Description_${index + 1}`] = item.Description;
+                acc[`Quantity_${index + 1}`] = item.Quantity;
+                acc[`Unit_${index + 1}`] = item.Unit;
+                acc[`Unit_Price_${index + 1}`] = item["Unit Price"];
+                acc[`Amount_Owed_${index + 1}`] = item["Amount Owed"];
+                return acc;
+            }, {});
+        
+        cleanedEntry = { ...cleanedEntry, ...flattenedItems };
+        delete cleanedEntry.Items_to_be_purchased
+        }
+        return cleanedEntry;
+    });
+}
+
+// ✅ Save each page as a separate JSON file
+async function savePaginatedJson(cleanedData, outputFolder) {
+    for (const entry of cleanedData) {
+      const llwValue = entry.LLW || "UNKNOWN_LLW";
+      const fileName = `${llwValue}_${entry.Page}of${entry.Of}.json`;
+      const filePath = path.join(outputFolder, fileName);
+      
+      await fs.writeFile(filePath, JSON.stringify(entry, null, 2), "utf8");
+      console.log(`✅ JSON file saved: ${filePath}`);
+    }
+  }
+  
+  
+
+// ✅ Ensure the output directory exists
+if (!fsSync.existsSync(outputFolder)) {
+    fs.mkdirSync(outputFolder);
+}
+
+// ✅ Clean, log, and save JSON
+const cleanedData = cleanJson(paginatedData);
+console.log("Cleaned Paginated Data:", JSON.stringify(cleanedData, null, 2));
+await fs.writeFile(outputFilePath, JSON.stringify(cleanedData, null, 2), "utf8");
+console.log(`✅ Cleaned data saved to: ${outputFilePath}`);
+
+// ✅ Save paginated JSON files
+await savePaginatedJson(cleanedData, outputFolder);
+}
+}
+create_template()
