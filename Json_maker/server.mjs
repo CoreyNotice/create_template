@@ -271,6 +271,7 @@ async function create_template() {
       }
 
       const cleanedData = cleanJson(paginatedData);
+      
       await fs.writeFile(outputFilePath, JSON.stringify(cleanedData, null, 2), 'utf8');
       console.log(`✅ Cleaned data saved: ${outputFilePath}`);
 
