@@ -70,7 +70,8 @@
     "Quantity_8": "1",
     "Unit_8": "Each",
     "Unit_Price_8": 23412.99,
-    "Amount_Owed_8": 23412.99
+    "Amount_Owed_8": 23412.99,
+    "CP": "N/A"
   },
   {
     "Project_Name": "SL24 Cafeteria Experience",
@@ -143,6 +144,7 @@
     "Quantity_8": "",
     "Unit_8": "",
     "Unit_Price_8": "",
-    "Amount_Owed_8": ""
+    "Amount_Owed_8": "",
+    "CP": "N/A"
   }
 ]

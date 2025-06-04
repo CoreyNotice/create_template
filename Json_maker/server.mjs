@@ -4,6 +4,7 @@ import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import {award} from './services/award.js';
 
 async function create_template() {
   // ✅ Define file paths
@@ -271,11 +272,12 @@ async function create_template() {
       }
 
       const cleanedData = cleanJson(paginatedData);
-      
-      await fs.writeFile(outputFilePath, JSON.stringify(cleanedData, null, 2), 'utf8');
+      const enrichedData = award(cleanedData)
+
+      await fs.writeFile(outputFilePath, JSON.stringify(enrichedData, null, 2), 'utf8');
       console.log(`✅ Cleaned data saved: ${outputFilePath}`);
 
-      for (const entry of cleanedData) {
+      for (const entry of enrichedData) {
         const llwValue = entry.LLW || 'UNKNOWN_LLW';
         const fileNameOut = `${llwValue}_${entry.Page}of${entry.Of}.json`;
         const filePath = path.join(outputFolder, fileNameOut);

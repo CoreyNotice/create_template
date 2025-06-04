@@ -36,7 +36,7 @@ async function generateTemplates() {
 
             const buf = doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" });
 
-            const outputFilePath = path.resolve(__dirname, `output_${path.basename(jsonFile, ".json")}.docx`);
+            const outputFilePath = path.resolve(__dirname, `o${path.basename(jsonFile, ".json")}.docx`);
             await fs.writeFile(outputFilePath, buf);
             console.log(`✅ Worker ${workerId} generated: ${outputFilePath}`);
         }
