@@ -77,24 +77,46 @@ async function create_template() {
 
       // ✅ Set child headers to exclude from validation
       const excludedChildren = ['FMS ID', 'Award', 'Vendor Number', 'Vendor ID']; // ← MOVED OUTSIDE to be shared
+function findHeaderCells() {
+  const range = xlsx.utils.decode_range(worksheet['!ref']);
+  let headerPositions = {};
+  let fullPurchaseAmount = null; // Store extracted value
 
-      function findHeaderCells() {
-        const range = xlsx.utils.decode_range(worksheet['!ref']);
-        let headerPositions = {};
+  for (let R = range.s.r; R <= range.e.r; ++R) {
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const cell_address = { c: C, r: R };
+      const cell_ref = xlsx.utils.encode_cell(cell_address);
 
-        for (let R = range.s.r; R <= range.e.r; ++R) {
-          for (let C = range.s.c; C <= range.e.c; ++C) {
-            const cell_address = { c: C, r: R };
-            const cell_ref = xlsx.utils.encode_cell(cell_address);
+      if (worksheet[cell_ref] && worksheet[cell_ref].v) {
+        let cellValue = worksheet[cell_ref].v.toString().trim();
+        headerPositions[cellValue] = { ref: cell_ref, row: R, col: C };
 
-            if (worksheet[cell_ref] && worksheet[cell_ref].v) {
-              let cellValue = worksheet[cell_ref].v.toString().trim();
-              headerPositions[cellValue] = { ref: cell_ref, row: R, col: C };
+        // ✅ Check for "Full Purchase Amount"
+        if (cellValue.toLowerCase() === "Full Purchase Amount") {
+          let targetCol = C + 1; // Start searching to the right
+
+          while (targetCol <= range.e.c) {
+            let nextCellRef = xlsx.utils.encode_cell({ c: targetCol, r: R });
+            let nextCellValue = worksheet[nextCellRef]?.v;
+
+            if (nextCellValue && !isNaN(parseFloat(nextCellValue))) {
+              fullPurchaseAmount = parseFloat(nextCellValue);
+              break; // Stop searching once we find the first number
             }
+
+            targetCol++;
           }
         }
-        return headerPositions;
       }
+    }
+  }
+
+  if (fullPurchaseAmount !== null) {
+    baseData["Full Purchase Amount"] = fullPurchaseAmount;
+  }
+
+  return headerPositions;
+}
 
       const headerCells = findHeaderCells();
 
@@ -166,62 +188,79 @@ async function create_template() {
       }
 
       // ✅ Extract items logic (unchanged)
-      let items = [];
-      if (headerCells['Items to be purchased']) {
-        const itemRow = headerCells['Items to be purchased'].row + 1;
-        let rowIndex = itemRow;
+     let items = [];
+if (headerCells['Items to be purchased']) {
+  const itemRow = headerCells['Items to be purchased'].row + 1;
+  let rowIndex = itemRow;
 
-        while (true) {
-          let descriptionCellRef = xlsx.utils.encode_cell({
-            c: headerCells['Description'].col,
-            r: rowIndex
-          });
-          if (!worksheet[descriptionCellRef]) break;
+  while (true) {
+    let descriptionCellRef = xlsx.utils.encode_cell({
+      c: headerCells['Description'].col,
+      r: rowIndex
+    });
+    if (!worksheet[descriptionCellRef]) break;
 
-          let item = {
-            Description: worksheet[descriptionCellRef]?.v || '',
-            Quantity: worksheet[xlsx.utils.encode_cell({ c: headerCells['Quantity'].col, r: rowIndex })]?.v || '',
-            Unit: worksheet[xlsx.utils.encode_cell({ c: headerCells['Unit'].col, r: rowIndex })]?.v || '',
-            'Unit Price':
-              worksheet[xlsx.utils.encode_cell({ c: headerCells['$ Unit Price'].col, r: rowIndex })]?.v || '',
-            'Amount Owed':
-              worksheet[xlsx.utils.encode_cell({ c: headerCells['Amount Owed'].col, r: rowIndex })]?.v || ''
-          };
+    let item = {
+      Description: worksheet[descriptionCellRef]?.v || '',
+      Quantity: worksheet[xlsx.utils.encode_cell({ c: headerCells['Quantity'].col, r: rowIndex })]?.v || '',
+      Unit: worksheet[xlsx.utils.encode_cell({ c: headerCells['Unit'].col, r: rowIndex })]?.v || '',
+      'Unit Price':
+        worksheet[xlsx.utils.encode_cell({ c: headerCells['$ Unit Price'].col, r: rowIndex })]?.v || '',
+      'Amount Owed':
+        worksheet[xlsx.utils.encode_cell({ c: headerCells['Amount Owed'].col, r: rowIndex })]?.v || ''
+    };
 
-          if (!item.Description || item.Description.toLowerCase() === 'description') {
-            rowIndex++;
-            continue;
-          }
+    if (!item.Description || item.Description.toLowerCase() === 'description') {
+      rowIndex++;
+      continue;
+    }
 
-          items.push(item);
-          rowIndex++;
-        }
-      }
+    items.push(item);
+    rowIndex++;
+  }
+}
 
-      const MAX_ITEMS_PER_PAGE = 8;
-      let totalPages = Math.ceil(items.length / MAX_ITEMS_PER_PAGE);
-      let paginatedData = [];
+const MAX_ITEMS_PER_PAGE = 8;
+let totalPages = Math.ceil(items.length / MAX_ITEMS_PER_PAGE);
+let paginatedData = [];
 
-      for (let i = 0; i < totalPages; i++) {
-        let pageItems = items.slice(i * MAX_ITEMS_PER_PAGE, (i + 1) * MAX_ITEMS_PER_PAGE);
-        while (pageItems.length < MAX_ITEMS_PER_PAGE) {
-          pageItems.push({
-            Description: '',
-            Quantity: '',
-            Unit: '',
-            'Unit Price': '',
-            'Amount Owed': ''
-          });
-        }
+for (let i = 0; i < totalPages; i++) {
+  let pageItems = items.slice(i * MAX_ITEMS_PER_PAGE, (i + 1) * MAX_ITEMS_PER_PAGE);
+  while (pageItems.length < MAX_ITEMS_PER_PAGE) {
+    pageItems.push({
+      Description: '',
+      Quantity: '',
+      Unit: '',
+      'Unit Price': '',
+      'Amount Owed': ''
+    });
+  }
 
-        paginatedData.push({
-          ...baseData,
-          'Items to be purchased': pageItems,
-          Page: `${i + 1}`,
-          Of: `${totalPages}`,
-          Date: new Date().toISOString().slice(0, 10) // ← ADDED: date in JSON
-        });
-      }
+  // Handling Award Data
+  const MAX_AWARDS = 8;
+  let awardString = baseData["Award"] || ""; // Extracts the existing award string
+  let awardData = awardString.split(" ").filter(a => a.trim() !== ""); // Splits awards into an array
+  let formattedAwards = {};
+
+  for (let j = 0; j < awardData.length; j++) {
+    formattedAwards[`Award_${j + 1}`] = awardData[j];
+  }
+
+  for (let j = awardData.length; j < MAX_AWARDS; j++) {
+    formattedAwards[`Award_${j + 1}`] = "";
+  }
+
+  paginatedData.push({
+    ...baseData,
+    'Items to be purchased': pageItems,
+    Page: `${i + 1}`,
+    Of: `${totalPages}`,
+    Date: new Date().toISOString().slice(0, 10),
+    ...formattedAwards // Injecting Award data into the JSON structure
+  });
+}
+
+
    
 
       function cleanJson(data) {
